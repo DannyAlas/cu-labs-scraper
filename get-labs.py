@@ -1,44 +1,40 @@
-"""
-College labs page -> [email, ~phone, ~address, website, ~faculty, blurb]
-
-TODO: tidy up code, add commentsc and error handling
-- fix subdomain.colorado.edu links navbar scraping
-- add phone number scraping
-- add address scraping
-- add faculty scraping
-"""
-
-import requests # NOTE get object should be closed to avioud multi connection server errors
-from bs4 import BeautifulSoup
+import requests  # NOTE get object should be closed to aviod multi connection server errors
+from bs4 import BeautifulSoup, element
 import re
 import uuid
-import pandas as pd
-from tqdm import tqdm
 
 # a list of words to avoid when guessing lab names
-AVOID = ["www", "org", "colorado", "edu", "mcdb", "research", "labs", "lab", "com", "https", "https:", "http", "http:", "mcdbiology"]
-dict_href_links = {}
+AVOID = [
+    "www",
+    "org",
+    "colorado",
+    "edu",
+    "mcdb",
+    "research",
+    "labs",
+    "lab",
+    "com",
+    "https",
+    "https:",
+    "http",
+    "http:",
+    "mcdbiology",
+    "sites",
+    "faculty",
+    "people",
+]
+# a list of social media names
+SOCIAL = [
+    "facebook",
+    "twitter",
+    "linkedin",
+    "instagram",
+    "youtube",
+    "github",
+    "pinterest",
+    "reddit",
+]
 
-def getdata(url):
-    return requests.get(url).text
-
-def get_links(html_data, site_link):
-    """returns a list of links on a webpage"""
-    soup = BeautifulSoup(html_data, "html.parser")
-    lab_dict = []
-    for link in soup.find_all("a", href=True):
-        
-        # Append to list if new link contains original link
-        if str(link["href"]).startswith((str(site_link))):
-            lab_dict.append(link["href"])
-            
-        # Include all href that do not start with website link but with "/"
-        if str(link["href"]).startswith("/"):
-            if link["href"] not in dict_href_links:
-                dict_href_links[link["href"]] = None
-                link_with_www = site_link + link["href"][1:]
-                lab_dict.append(link_with_www)
-    return {"site": site_link, "subpages" : lab_dict}
 
 def guess_lab_name(labs: dict):
     uniques = []
@@ -76,24 +72,28 @@ def guess_lab_name(labs: dict):
                 for item in matches:
                     try:
                         uniques.remove(item)
-                    except Exception: pass
+                    except Exception:
+                        pass
 
-            
-    for lab in labs:
-        # append unique link attributes to a list
-        if labs[lab]["lab"] == "UNNAMED":
-            print("unable to guess name for: ", labs[lab]["link"])
+    return labs
+
 
 def get_lab_desc(lab_name: str) -> str:
     url = f"https://www.google.com/search?&q=cu+boulder+{lab_name}+lab"
-    req = requests.get(url)
+    req = url
     sor = BeautifulSoup(req.text, "html.parser")
-    
-    return sor.findAll("div",{"class":"BNeawe"})[2].text
+
+    return sor.findAll("div", {"class": "BNeawe"})[2].text
 
 
-def get_links(webpage, soup, search_navbar: bool = True):
+def get_links(
+    webpage: str,
+    soup: BeautifulSoup,
+    recursion: int = 1,
+    search_navbar: bool = True,
+):
     """returns a list of subpages on a webpage
+
     Parameters
     ----------
     webpage : str
@@ -102,47 +102,144 @@ def get_links(webpage, soup, search_navbar: bool = True):
         BeutifulSoup object of the webpage, created using BeautifulSoup(html_data, "html.parser")
     search_navbar : bool, optional
         whether to search for subpages in the navbar, by default True
-    
+    nav_recursion : int, optional
+        how many levels of recursion to search for subpages in the navbar, by default 1
+
     Returns
     -------
     list_links : list
         list of subpages on a webpage
     """
-
+    # list of links in the colorado footer to avoid
+    avoid = [
+        "http://www.colorado.edu",
+        "http://www.colorado.edu/about/privacy-statement",
+        "http://www.colorado.edu/about/legal-trademarks",
+        "http://www.colorado.edu/map",
+        "https://www.colorado.edu/search",
+        "https://calendar.colorado.edu",
+        "https://www.colorado.edu/artsandsciences",
+    ]
     list_links = [webpage]
-    dict_href_links = {}
-    
-    for link in soup.find_all("a", href=True):
-        
-        # Append to list if new link contains original link
-        if str(link["href"]).startswith((str(webpage))):
-            list_links.append(link["href"])
-            
-        # Include all href that do not start with website link but with "/"
-        if str(link["href"]).startswith("/"):
-            if link["href"] not in dict_href_links:
-                dict_href_links[link["href"]] = None
-                link_with_www = webpage + link["href"][1:]
-                list_links.append(link_with_www)
-    
+
+    def is_webpage(link: str):
+        """returns True if a link points to a webpage
+
+        Parameters
+        ----------
+        link : str
+            the link to check
+        """
+
+        # if a link is a full link, check if it is a subpage of the webpage
+        if re.search("text/html", str(requests.get(link).headers["Content-Type"])):
+            return True
+
+    def add_link(
+        links: element.ResultSet,
+        links_list: list = list_links,
+        avoid: list = avoid,
+        only_sub_urls: bool = True,
+    ):
+        """adds links to list_links
+        Parameters
+        ----------
+        links : bs4.element.ResultSet
+            a list of links to check
+        links_list : list, optional
+            a list of links to add to, by default get_links.list_links
+        avoid : list, optional
+            a list of links to avoid, by default get_links.avoid
+        only_sub_urls : bool, optional
+            whether to search only links that are subpages of the webpage, by default True
+            for example: if website = "https://lab.colorado.edu" and link = "https://youtube.com/video", if only_sub_urls = True, the link will be ignored
+        """
+
+        # since we're already looping through links, other useful data as well
+        if only_sub_urls:
+            # remove duplicates and links that are not subpages of the webpage and are not webpages and are in aviod
+            links = [
+                x
+                for x in set(links)
+                if x["href"] not in avoid
+                and x["href"].startswith("http")
+                and any([x for x in set(x["href"].split("/")).intersection(webpage.split("/")) if x not in ["https:", "http:", "", "/", "www", ":", ".com", ".edu", "www.colorado.edu", "colorado.edu"]])
+                or x["href"].startswith("/")
+            ]
+        else:
+            # remove duplicates and links that are not webpages and are in aviod
+            links = [
+                x
+                for x in set(links)
+                if x["href"] not in avoid
+                and x["href"].startswith("http")
+                or x["href"].startswith("/")
+            ]
+
+        for link in links:
+            # if the link is a relative link, add the webpage to the beginning of the link
+            full_link = (
+                str(
+                    webpage
+                    + "/".join(
+                        [
+                            x
+                            for x in link["href"].split("/")
+                            if x not in webpage.split("/")
+                        ]
+                    )
+                )
+                if link["href"].startswith("/")
+                else link["href"]
+            )
+            # if the link is novel, not to be avoided and is a subpage of the webpage, add it to the list of links
+            if full_link not in list_links + avoid and is_webpage(full_link):
+                list_links.append(full_link)
+
+        return links_list
+
+    # if search_navbar is true, recurse into those pages and extract the links
     if search_navbar:
-        for link in soup.find_all("a", href=True):
-            if str(link["href"]).startswith("/"):
-                if link["href"] not in dict_href_links:
-                    dict_href_links[link["href"]] = None
-                    link_with_www = webpage + link["href"][1:]
-                    list_links.append(link_with_www)
-    
+        # Search for links in navbar
+        navbar = soup.find("nav")
+        list_links = []
+
+        if navbar:
+            # add navbar links to links to be searched
+            list_links.extend(add_link(navbar.find_all("a", href=True)))
+            print(f"Found {list_links} links in navbar")
+
+    for x in range(recursion + 1):
+        print(f"recursion {x}")
+        # recurse through list_links and add to list_links, removing from nav links when srearched
+        # remove duplicates
+        list_links = list(set(list_links))
+        for link in list_links:
+            try:
+                print(f"searching {link}")
+                html_data = requests.get(link)
+                soup = BeautifulSoup(html_data.text, "html.parser")
+                links=soup.find_all("a", href=True)
+
+                list_links.extend(add_link(links=links))
+                html_data.close()
+                list_links = list(set(list_links))
+            except Exception as e:
+                print(e)
+                break
+
+    print(f"list_links: \n{list_links}\n")
     return list_links
+
 
 def emailExtractor(soup):
     """returns a list of emails on a webpage
-    
+
     Parameters
     ----------
     soup : str
         BeutifulSoup object of the webpage, created using BeautifulSoup(html_data, "html.parser")
-    
+
     Returns
     -------
     emailList : list
@@ -150,96 +247,83 @@ def emailExtractor(soup):
     """
     emailList = []
 
-    mailtos = soup.find_all('a')
+    mailtos = soup.find_all("a")
 
     href_lst = []
     for i in mailtos:
         if i not in href_lst:
             try:
-                href_lst.append(i['href'])
-            except: pass
+                href_lst.append(i["href"])
+            except:
+                pass
 
     for href in href_lst:
-        if ':' in href:
-            if href not in emailList and 'mailto' in href:
-                emailList.append(href)
-    
+        if ":" in href:
+            if href not in emailList and "mailto" in href:
+                emailList.append(str(href).split(":")[1])
+
     return emailList
 
-def get_inner(website_link):
-    response = requests.get(website_link).text
-    soup = BeautifulSoup(response, "html.parser")
-    
+
+def get_labs(soup: BeautifulSoup) -> dict:
+    """returns a dictionary of labs on a webpage
+
+    Parameters
+    ----------
+    soup : str
+        BeutifulSoup object of the webpage, created using BeautifulSoup(html_data, "html.parser")
+
+    Returns
+    -------
+    labs : dict
+        dictionary of labs on a webpage
+    """
+
+    lab_dict = {}
     pattern = re.compile(r"^/[a-zA-Z]+/.*$", re.IGNORECASE)
     content = soup.find_all("div", {"class": "content-grid-item"})
-    lab_dict = {}
-    
+
     for div in content:
         links = div.find_all("a", href=True)
         for link in links:
             link_text = link.text if not link.text == "" else "UNNAMED"
-            link_herf = link.get('href')
+            link_herf = link.get("href")
             ID = uuid.uuid4().int
-            if pattern.match(str(link_herf)) and link_herf not in [x for x in [lab_dict[lab]['link'] for lab in lab_dict]]:
-                lab_dict[ID] = {"lab": link_text, 'link': str("https://www.colorado.edu" + link_herf)}
+            if pattern.match(str(link_herf)) and link_herf not in [
+                x for x in [lab_dict[lab]["link"] for lab in lab_dict]
+            ]:
+                lab_dict[ID] = {
+                    "lab": link_text,
+                    "link": str("https://www.colorado.edu" + link_herf),
+                }
             else:
-                if link_herf not in [x for x in [lab_dict[lab]['link'] for lab in lab_dict]]:
-                    lab_dict[ID] = {"lab": link_text, 'link': link_herf} 
-    
-    # guess the name of the lab if UNNAMED
-    guess_lab_name(lab_dict)
-    # double check for duplicates
-    
-    # FIX THIS MESS...
-    #----------------------------
-    # a list of all the links
-    lab_links = [x for x in [lab_dict[lab]['link'] for lab in lab_dict]]
-    # get a list of all lab links that appear more than once
-    matching_lab_links = []
-    for lab_link in lab_links:
-        if lab_links.count(lab_link) > 1:
-            matching_lab_links.append(lab_link)
-    # get a list of all the lab UUIDs with matching links
-    matching_labs = [lab for lab in lab_dict if lab_dict[lab]['link'] in matching_lab_links]
-    # get the lab names for the matching labs
-    names = [lab_dict[lab]['lab'] for lab in matching_labs]
-    for name in names:
-        # if there is an uppercase name use that as the lab name
-        if bool(re.match(r'\w*[A-Z]\w*', name)):
-            linkofthislab = lab_dict[matching_labs[names.index(name)]]['link']
-            labstobechanges = [lab for lab in matching_labs if lab_dict[lab]['link'] == linkofthislab]
-            for lab in labstobechanges:
-                lab_dict[lab]['lab'] = name
-    # delete duplicates
-    for lab_name in [lab_dict[lab]['lab'] for lab in lab_dict]:
-        if [lab_dict[lab]['lab'] for lab in lab_dict].count(lab_name) > 1:
-            lab_dict.pop([lab for lab in lab_dict if lab_dict[lab]['lab'] == lab_name][0])
-    #----------------------------
+                if link_herf not in [
+                    x for x in [lab_dict[lab]["link"] for lab in lab_dict]
+                ]:
+                    lab_dict[ID] = {"lab": link_text, "link": link_herf}
 
-    # get the email of the lab
-    for lab in tqdm(lab_dict, desc="Getting emails"):
-        response = requests.get(lab_dict[lab]['link'])
-        soup = BeautifulSoup(response.text, "html.parser")
-        subpages = get_links(lab_dict[lab]['link'], soup)
-        response.close()
-        emails = []
-        for subpage in subpages:
-            response = requests.get(subpage)
-            soup = BeautifulSoup(response.text, "html.parser")
-            emails.extend(emailExtractor(soup))
-            response.close()
-        
-        lab_dict[lab]['email'] = emails
-
-    # get the description of the lab
-    for lab in tqdm(lab_dict, desc="Getting descriptions"):
-        lab_dict[lab]['desc'] = str(get_lab_desc(lab_dict[lab]['lab']))
-    
     return lab_dict
 
 
-if __name__ == "__main__":
-        
-    mcdb_labs = get_inner("URL HERE")
+def remove_duplicates(lab_dict: dict) -> dict:
+    """removes duplicate labs from a dictionary of labs
 
-    pd.DataFrame.from_dict(mcdb_labs, orient="index").to_csv("labs.csv")
+    Parameters
+    ----------
+    lab_dict : dict
+        dictionary of labs on a webpage
+
+    Returns
+    -------
+    lab_dict : dict
+        dictionary of labs on a webpage without duplicates
+    """
+
+    labs = [lab_dict[lab]["lab"] for lab in lab_dict]
+    links = [lab_dict[lab]["link"] for lab in lab_dict]
+    for i in range(len(labs)):
+        if labs.count(labs[i]) > 1:
+            if links.count(links[i]) > 1:
+                lab_dict.pop(i)
+
+    return lab_dict
